@@ -242,7 +242,8 @@ tr.win td{font-weight:700}
 // VW is the visible view; W is the whole battlefield, twice as wide, panned with the camera.
 const VW = 1280, W = 2560, H = 720, G = 330, DT = 1/60, WIND_MAX = 75, POWER_K = 9.2, DEATH = 0.38;
 const CLOUD_W = VW + (W - VW)*.6 + 400, BGP = .5, BGW = VW + (W - VW)*BGP, MM_W = 280, MM_H = Math.round(MM_W*H/W), MG_TIME = 6;
-const SHIELD_R = 82, UPGRADE_PRICE = 120, UPGRADE_MAX = 2;
+const BALLOON_FIRE = 6, BALLOON_RATE = .12;
+const SHIELD_R = 114, UPGRADE_PRICE = 120, UPGRADE_MAX = 2;
 const RM = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = s => document.querySelector(s);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -265,7 +266,7 @@ const WEAPONS = [
   { id:'grenade',      name:'Grenade',        price:15, r:24, wind:.6,  desc:'Bounces off the ground and explodes only when it hits a castle.' },
   { id:'supergrenade', name:'Super Grenade',  price:45, r:20, wind:.6,  desc:'Bursts 2.5 seconds after launch, wherever it is, and scatters six small grenades.' },
   { id:'missile',      name:'Direct Missile', price:30, r:24, wind:0,   desc:'Flies in a straight line. Gravity and wind do not touch it.' },
-  { id:'balloon',      name:'Balloon',        price:50, r:12, wind:.6, imm:1.4, desc:'Rises, drifts across the sky and drops six bombs. Power sets its speed.' },
+  { id:'balloon',      name:'Balloon',        price:50, r:12, wind:.6, imm:1.4, desc:'Rises, drifts across the sky and rains a steady stream of pellets until it leaves the field. Power sets its speed.' },
   { id:'defense',      name:'Defense',        price:35, r:0,  wind:0,   desc:'Raises a shield over your castle that stops two direct hits. Uses your turn.' },
   { id:'grounddef',    name:'Ground Defense', price:20, r:0,  wind:.6,  desc:'Throws up a hill in the path of enemy fire.' },
   { id:'ballgrenade',  name:'Ball Grenade',   price:35, r:34, wind:.5,  desc:'Ricochets hard off the ground and hits a castle for severe damage.' },
@@ -311,7 +312,7 @@ if (typeof Image !== 'undefined') {
   im.src = SHIVA_IMG;
 }
 const WEAP = {}; WEAPONS.forEach(w => WEAP[w.id] = w);
-WEAP.mini = { id:'mini', r:13, wind:.6 }; WEAP.rock = { id:'rock', r:18, wind:.15 }; WEAP.bomb = { id:'bomb', r:16, wind:.2 }; WEAP.bullet = { id:'bullet', r:5, wind:0 };
+WEAP.mini = { id:'mini', r:13, wind:.6 }; WEAP.rock = { id:'rock', r:18, wind:.15 }; WEAP.bomb = { id:'bomb', r:16, wind:.2 }; WEAP.pellet = { id:'pellet', r:7, wind:.2 }; WEAP.bullet = { id:'bullet', r:5, wind:0 };
 
 const SKIES = {
   noon:  { top:'#3f7fcf', mid:'#8fbde6', bot:'#e2eee8', sun:'#fff6d8', sunY:120, far:'#9db4cc', near:'#7b97b1', cloud:[255,255,255], tint:[1,1,1], label:'Noon' },
@@ -434,10 +435,10 @@ function genTerrain(slots) {
     for (let x = 0; x < W; x++) { const d = (x - cx)/hw; if (Math.abs(d) < 1) h[x] -= hh*(Math.cos(d*Math.PI) + 1)/2; }
   }
   for (const sx of slots) {
-    let avg = 0, n = 0; for (let x = sx - 50; x <= sx + 50; x++) { if (x >= 0 && x < W) { avg += h[x]; n++; } } avg /= n;
+    let avg = 0, n = 0; for (let x = sx - 90; x <= sx + 90; x++) { if (x >= 0 && x < W) { avg += h[x]; n++; } } avg /= n;
     avg = clamp(avg, H*.36, H - 90);
-    for (let x = Math.max(0, sx - 115); x < Math.min(W, sx + 115); x++) {
-      const d = Math.abs(x - sx); let t = d < 60 ? 1 : 1 - (d - 60)/55; t = clamp(t, 0, 1); t = t*t*(3 - 2*t);
+    for (let x = Math.max(0, sx - 161); x < Math.min(W, sx + 161); x++) {
+      const d = Math.abs(x - sx); let t = d < 106 ? 1 : 1 - (d - 106)/55; t = clamp(t, 0, 1); t = t*t*(3 - 2*t);
       h[x] = lerp(h[x], avg, t);
     }
   }
@@ -537,27 +538,52 @@ function mound(x, y) {
 }
 
 // ================= castles =================
-function brickFill(c, x, y, w, h, seed) {
+// Laid out after Bodiam: round corner drums, square towers with turrets, a machicolated gatehouse, crenellations everywhere.
+const CASTLE_W = 200, CASTLE_H = 130, LAUNCH_H = 120, CASTLE_MID = 62;
+const CASTLE_TOWERS = [ // back to front; x, width, top of the wall below the parapet
+  { x:140, w:26, top:28, turret:{ x:156, w:11, top:17 } },
+  { x:34,  w:32, top:30, gate:true, turret:{ x:32, w:10, top:19 }, turret2:{ x:58, w:10, top:19 } },
+  { x:2,   w:26, top:44, round:true },
+  { x:172, w:26, top:40, round:true },
+  { x:82,  w:36, top:18, round:true }
+];
+function brickFill(c, x, y, w, h, seed, round) {
   c.save(); c.beginPath(); c.rect(x, y, w, h); c.clip();
-  c.fillStyle = '#5a544c'; c.fillRect(x, y, w, h);
-  const bh = 7, bw = 13;
+  c.fillStyle = '#6b5f49'; c.fillRect(x, y, w, h);
+  const bh = 7, bw = round ? 10 : 14;
   for (let row = 0, yy = y + h; yy > y - bh; row++, yy -= bh) {
     const off = (row % 2)*bw/2;
     for (let xx = x - bw + off; xx < x + w; xx += bw) {
-      const l = 150 + hash(xx|0, yy|0, seed)*44 - 22;
-      c.fillStyle = `rgb(${l|0},${(l - 6)|0},${(l - 17)|0})`; c.fillRect(xx + 1, yy - bh + 1, bw - 1, bh - 1);
+      const l = 174 + hash(xx|0, yy|0, seed)*40 - 20;
+      c.fillStyle = `rgb(${l|0},${(l - 13)|0},${(l - 46)|0})`; c.fillRect(xx + 1, yy - bh + 1, bw - 1, bh - 1);
     }
   }
   const g = c.createLinearGradient(x, 0, x + w, 0);
-  g.addColorStop(0, 'rgba(255,240,210,.2)'); g.addColorStop(.5, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.34)');
+  if (round) { g.addColorStop(0, 'rgba(0,0,0,.3)'); g.addColorStop(.32, 'rgba(255,240,205,.22)'); g.addColorStop(.6, 'rgba(0,0,0,.05)'); g.addColorStop(1, 'rgba(0,0,0,.48)'); }
+  else { g.addColorStop(0, 'rgba(255,240,210,.2)'); g.addColorStop(.5, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.34)'); }
   c.fillStyle = g; c.fillRect(x, y, w, h); c.restore();
 }
-function roof(c, cx, tip, base, her) {
-  const g = c.createLinearGradient(cx - 16, 0, cx + 16, 0);
-  g.addColorStop(0, her.light); g.addColorStop(.45, her.col); g.addColorStop(1, her.dark);
-  c.fillStyle = g; c.beginPath(); c.moveTo(cx - 16, base); c.lineTo(cx, tip); c.lineTo(cx + 16, base); c.closePath(); c.fill();
-  c.strokeStyle = 'rgba(0,0,0,.22)'; c.lineWidth = 1;
-  for (let yy = tip + 6; yy < base; yy += 5) { const t = (yy - tip)/(base - tip); c.beginPath(); c.moveTo(cx - 16*t, yy + .5); c.lineTo(cx + 16*t, yy + .5); c.stroke(); }
+// a parapet that sits proud of the wall, topped with merlons
+function battlement(c, x, top, w, seed, round) {
+  brickFill(c, x - 2, top - 9, w + 4, 9, seed, round);
+  const n = Math.max(2, Math.round((w + 4)/8)), mw = 5, step = (w + 4 - mw)/(n - 1);
+  for (let i = 0; i < n; i++) brickFill(c, Math.round(x - 2 + i*step), top - 16, mw, 8, seed + 7, round);
+  c.fillStyle = 'rgba(40,30,18,.55)'; c.fillRect(x - 2, top - 1, w + 4, 2);
+  c.fillStyle = 'rgba(255,240,210,.25)'; c.fillRect(x - 2, top - 9, w + 4, 1);
+}
+function machicolations(c, x, top, w) {
+  c.fillStyle = 'rgba(30,20,12,.8)';
+  for (let mx = x + 2; mx < x + w - 3; mx += 6) { c.beginPath(); c.moveTo(mx, top + 1); c.lineTo(mx + 3, top + 1); c.lineTo(mx + 3, top + 5); c.arc(mx + 1.5, top + 5, 1.5, 0, Math.PI); c.closePath(); c.fill(); }
+  c.fillStyle = 'rgba(40,30,18,.45)'; c.fillRect(x, top + 8, w, 1.5);
+}
+function tower(c, t, seed) {
+  brickFill(c, t.x, t.top, t.w, CASTLE_H - t.top, seed, t.round);
+  brickFill(c, t.x - 2, CASTLE_H - 12, t.w + 4, 12, seed + 5, t.round); // battered plinth
+  c.fillStyle = 'rgba(40,30,18,.35)'; c.fillRect(t.x - 2, CASTLE_H - 13, t.w + 4, 1.5);
+  c.fillStyle = 'rgba(40,30,18,.3)'; c.fillRect(t.x, t.top + 14, t.w, 1.5); // string course
+  for (const tt of [t.turret, t.turret2]) if (tt) { brickFill(c, tt.x, tt.top, tt.w, t.top - tt.top + 10, seed + 3, true); battlement(c, tt.x, tt.top, tt.w, seed + 4, true); }
+  battlement(c, t.x, t.top, t.w, seed + 1, t.round);
+  if (t.gate) machicolations(c, t.x - 2, t.top, t.w + 4);
 }
 function pennant(c, x, y, her) {
   c.fillStyle = '#3a2a1a'; c.fillRect(x - 1, y - 1, 10, 2);
@@ -565,30 +591,33 @@ function pennant(c, x, y, her) {
   c.fillStyle = '#ecc55a'; c.fillRect(x + 3, y + 5, 2, 8); c.fillRect(x + 1.5, y + 7, 5, 2);
 }
 function ironBands(c, level) {
-  c.fillStyle = '#34363c';
-  for (const y of [62, 92]) { c.fillRect(6, y, 26, 3); c.fillRect(68, y, 26, 3); }
-  c.fillRect(24, 76, 52, 3);
-  c.fillStyle = '#9aa0a8';
-  for (const y of [63, 93]) for (const x of [9, 16, 23, 29, 71, 78, 85, 91]) c.fillRect(x, y, 1.5, 1.5);
-  if (level >= 2) {
-    c.fillStyle = '#d9a93d'; c.fillRect(3, 33, 32, 2); c.fillRect(65, 33, 32, 2);
-    c.fillStyle = '#34363c'; c.fillRect(24, 106, 52, 3); c.fillRect(6, 106, 26, 3); c.fillRect(68, 106, 26, 3);
+  const ys = level >= 2 ? [58, 88, 112] : [66, 100];
+  for (const t of CASTLE_TOWERS) for (const y of ys) {
+    c.fillStyle = '#34363c'; c.fillRect(t.x, y, t.w, 3);
+    c.fillStyle = '#9aa0a8'; for (let x = t.x + 3; x < t.x + t.w - 1; x += 6) c.fillRect(x, y + 1, 1.5, 1.5);
   }
+  if (level >= 2) { c.fillStyle = '#d9a93d'; for (const t of CASTLE_TOWERS) c.fillRect(t.x - 2, t.top - 1, t.w + 4, 2); }
 }
+function slit(c, x, y, h) { c.fillRect(x - 1, y, 2.2, h); c.fillRect(x - 2.5, y + h/2 - 1, 5, 1.6); }
 function makeCastle(player, x, baseY, sky) {
-  const w = 100, h = 120, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const w = CASTLE_W, h = CASTLE_H, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
   const c = cv.getContext('2d'), her = HERALD[player.her], seed = (Math.random()*1e6)|0;
-  brickFill(c, 24, 54, 52, 66, seed);
-  for (let mx = 24; mx < 76; mx += 11) brickFill(c, mx, 46, 7, 9, seed + 1);
-  brickFill(c, 6, 36, 26, 84, seed + 2); brickFill(c, 68, 36, 26, 84, seed + 3);
-  c.fillStyle = '#6e675d'; c.fillRect(3, 33, 32, 4); c.fillRect(65, 33, 32, 4);
-  roof(c, 19, 4, 34, her); roof(c, 81, 4, 34, her);
+  brickFill(c, 20, 62, 160, h - 62, seed); battlement(c, 20, 62, 160, seed + 9); // curtain wall behind the towers
+  CASTLE_TOWERS.forEach((t, i) => tower(c, t, seed + 20*i));
   if (player.upgrade) ironBands(c, player.upgrade);
-  c.fillStyle = '#24160c'; c.beginPath(); c.moveTo(40, 120); c.lineTo(40, 100); c.arc(50, 100, 10, Math.PI, 0); c.lineTo(60, 120); c.closePath(); c.fill();
-  c.strokeStyle = '#4b301a'; c.lineWidth = 1; for (let gx = 43; gx < 60; gx += 4) { c.beginPath(); c.moveTo(gx + .5, 94); c.lineTo(gx + .5, 120); c.stroke(); }
-  c.strokeStyle = 'rgba(20,20,22,.9)'; for (let gy = 100; gy < 120; gy += 5) { c.beginPath(); c.moveTo(40, gy + .5); c.lineTo(60, gy + .5); c.stroke(); }
-  pennant(c, 33, 58, her); pennant(c, 59, 58, her);
-  c.fillStyle = 'rgba(0,0,0,.22)'; c.fillRect(4, 115, 92, 5);
+  // gatehouse: arch and portcullis
+  const gx0 = 41, gx1 = 59, gm = 50, gy = h - 18;
+  c.fillStyle = '#24160c'; c.beginPath(); c.moveTo(gx0, h); c.lineTo(gx0, gy); c.arc(gm, gy, 9, Math.PI, 0); c.lineTo(gx1, h); c.closePath(); c.fill();
+  c.strokeStyle = '#4b301a'; c.lineWidth = 1; for (let x = gx0 + 2; x < gx1; x += 3.5) { c.beginPath(); c.moveTo(x + .5, gy - 9); c.lineTo(x + .5, h); c.stroke(); }
+  c.strokeStyle = 'rgba(20,20,22,.9)'; for (let y = gy - 2; y < h; y += 5) { c.beginPath(); c.moveTo(gx0, y + .5); c.lineTo(gx1, y + .5); c.stroke(); }
+  c.fillStyle = 'rgba(40,30,18,.4)'; c.beginPath(); c.arc(gm, gy, 11, Math.PI, 0); c.lineTo(gx1, gy); c.arc(gm, gy, 9, 0, Math.PI, true); c.closePath(); c.fill();
+  pennant(c, 41, 66, her); pennant(c, 51, 66, her);
+  // weathering at the foot of the walls
+  c.save(); c.globalCompositeOperation = 'source-atop';
+  const wg = c.createLinearGradient(0, h - 22, 0, h); wg.addColorStop(0, 'rgba(60,58,30,0)'); wg.addColorStop(1, 'rgba(60,58,30,.45)');
+  c.fillStyle = wg; c.fillRect(0, h - 22, w, 22);
+  c.fillStyle = 'rgba(70,60,40,.16)'; for (let i = 0; i < 16; i++) { const sx = hash(i, 3, seed)*w, sy = 20 + hash(i, 7, seed)*90; c.fillRect(sx, sy, 1.5, 10 + hash(i, 9, seed)*24); }
+  c.restore();
   const im = c.getImageData(0, 0, w, h), d = im.data, mask = new Uint8Array(w*h); let count = 0;
   for (let i = 0; i < w*h; i++) {
     const j = i*4; if (d[j+3] > 110) { mask[i] = 1; count++; } else d[j+3] = 0;
@@ -597,8 +626,8 @@ function makeCastle(player, x, baseY, sky) {
   c.putImageData(im, 0, 0);
   const lit = sky.moon || sky === SKIES.dusk;
   c.fillStyle = lit ? '#ffc861' : '#20140b';
-  [[18,56],[18,84],[80,56],[80,84]].forEach(([wx, wy]) => c.fillRect(wx, wy, 3, 9));
-  c.beginPath(); c.moveTo(46, 78); c.lineTo(46, 69); c.arc(50, 69, 4, Math.PI, 0); c.lineTo(54, 78); c.closePath(); c.fill();
+  [[15,62,9],[15,96,9],[100,40,10],[100,72,10],[100,102,9],[153,46,9],[153,80,9],[185,58,9],[185,94,9],[162,30,6]].forEach(([wx, wy, wh]) => slit(c, wx, wy, wh));
+  for (const [wx, wy] of [[45,44],[55,44],[75,80],[129,80]]) { c.beginPath(); c.moveTo(wx - 2.5, wy + 11); c.lineTo(wx - 2.5, wy + 3); c.arc(wx, wy + 3, 2.5, Math.PI, 0); c.lineTo(wx + 2.5, wy + 11); c.closePath(); c.fill(); }
   return { player, x, y:baseY, w, h, cv, c, mask, total:count, count, hp:1, alive:true, collapse:0, vy:0, falling:false, lastHit:null, flagPh:rand(0, 6), shield:null };
 }
 const hpShown = hp => clamp((hp - DEATH)/(1 - DEATH), 0, 1);
@@ -607,7 +636,7 @@ function castlePix(c, x, y) {
   if (lx < 0 || ly < 0 || lx >= c.w || ly >= c.h) return false;
   return c.mask[ly*c.w + lx] === 1;
 }
-const shieldCenter = c => ({ x:c.x, y:c.y - 58 });
+const shieldCenter = c => ({ x:c.x, y:c.y - CASTLE_MID });
 function inShield(c, x, y) { if (!c.shield || !c.alive) return false; const s = shieldCenter(c); return y < c.y + 6 && Math.hypot(x - s.x, y - s.y) < SHIELD_R; }
 function damageCastle(c, x, y, r, owner) {
   r *= 1 - .15*(c.player.upgrade || 0);
@@ -639,7 +668,7 @@ function killCastle(c, killer) {
   if (who) { who.money += 75; who.roundEarn += 75; who.kills++; float(cx, cy - 70, `+$75  ${c.player.name} razed`, '#f1cd73', 2.4); }
   else float(cx, cy - 70, `${c.player.name}'s castle falls`, '#f5e6c4', 2.2);
 }
-function flagAttached(c) { for (let y = 5; y < 13; y++) for (let x = 79; x <= 83; x++) if (c.mask[y*c.w + x]) return true; return false; }
+function flagAttached(c) { for (let y = 18; y < 26; y++) for (let x = 98; x <= 102; x++) if (c.mask[y*c.w + x]) return true; return false; }
 function castleSupported(c) {
   if (c.y >= H - 1) return true;
   const left = c.x - c.w/2, top = c.y - c.h;
@@ -650,10 +679,10 @@ function castleSupported(c) {
   }
   return false;
 }
-function launchPoint(c, ang) { const a = ang*Math.PI/180; return { x: c.x + Math.cos(a)*18, y: c.y - 74 - Math.sin(a)*18 }; }
+function launchPoint(c, ang) { const a = ang*Math.PI/180; return { x: c.x + Math.cos(a)*18, y: c.y - LAUNCH_H - Math.sin(a)*18 }; }
 
 // ================= particles & fx =================
-function stoneCols() { const t = T.tint; return [[150,144,134],[122,116,108],[176,168,156],[96,90,84]].map(s => [s[0]*t[0], s[1]*t[1], s[2]*t[2]]); }
+function stoneCols() { const t = T.tint; return [[184,170,130],[150,138,104],[204,190,150],[118,108,82]].map(s => [s[0]*t[0], s[1]*t[1], s[2]*t[2]]); }
 function burst(x, y, n, o) {
   for (let i = 0; i < n && S.parts.length < 1400; i++) {
     const a = rand(0, TAU), sp = rand(.2, 1)*(o.sp || 100);
@@ -740,7 +769,7 @@ function superBurst(pr) {
 }
 function nearestFoe(pr) {
   let best = null, bd = 1e9;
-  for (const c of S.castles) { if (!c.alive || c === pr.owner.castle) continue; const d = Math.hypot(c.x - pr.x, c.y - 55 - pr.y); if (d < bd) { bd = d; best = c; } }
+  for (const c of S.castles) { if (!c.alive || c === pr.owner.castle) continue; const d = Math.hypot(c.x - pr.x, c.y - CASTLE_MID - pr.y); if (d < bd) { bd = d; best = c; } }
   return best;
 }
 function bounce(pr, ox, oy, rest) {
@@ -785,17 +814,22 @@ function updateProj(pr, dt) {
   } else if (pr.type === 'balloon') {
     pr.vy = pr.y > pr.alt ? lerp(pr.vy, -120, .06) : lerp(pr.vy, Math.sin(pr.age*2)*10, .05);
     pr.vx = pr.hs + S.wind*.6;
-    if (pr.age > .9) pr.dropT -= dt;
-    if (pr.age > .9 && pr.drops < 6 && pr.dropT <= 0) {
-      pr.dropT = .45; pr.drops++;
-      const b = newProj('bomb', pr.x, pr.y + 18, pr.vx*.9, 30, pr.owner); b.age = 1; S.proj.push(b); Snd.pop();
+    // fires pellets nonstop once aloft, holding off only while still over its own castle
+    const own = pr.owner.castle, firing = pr.age > .9 && pr.age < .9 + BALLOON_FIRE && pr.x > 0 && pr.x < W;
+    if (firing) pr.dropT -= dt;
+    if (firing && pr.dropT <= 0) {
+      pr.dropT = BALLOON_RATE;
+      if (!own || Math.abs(pr.x - own.x) > own.w/2 + 20) {
+        const b = newProj('pellet', pr.x + rand(-3, 3), pr.y + 18, pr.vx*.9 + rand(-15, 15), 40, pr.owner); b.age = 1; S.proj.push(b);
+        if (pr.drops++ % 3 === 0) Snd.pop();
+      }
     }
-    if (pr.drops >= 6 && pr.dropT < -.3) { burst(pr.x, pr.y, 10, { kind:'smoke', col:[220,210,200], sp:40 }); Snd.pop(); finish(pr); return; }
+    if (pr.age > .9 + BALLOON_FIRE + .3) { burst(pr.x, pr.y, 10, { kind:'smoke', col:[220,210,200], sp:40 }); Snd.pop(); finish(pr); return; }
   } else if (pr.type === 'falcon' && pr.age > .35 && pr.age < 7) {
     const tgt = nearestFoe(pr);
     let ang = Math.atan2(pr.vy, pr.vx);
     if (tgt) {
-      const want = Math.atan2(tgt.y - 50 - pr.y, tgt.x - pr.x);
+      const want = Math.atan2(tgt.y - CASTLE_MID - pr.y, tgt.x - pr.x);
       let d = want - ang; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
       ang += clamp(d, -3.4*dt, 3.4*dt);
     }
@@ -840,7 +874,7 @@ function impact(pr, h, ox, oy) {
     if (t === 'supergrenade') for (let i = 0; i < 6; i++) { const m = newProj('mini', pr.x, pr.y - 4, rand(-170, 170), rand(-280, -90), pr.owner); m.age = .5; S.proj.push(m); }
     burst(pr.x, pr.y, 20, { kind:'spark', col:HERALD[c.player.her].light ? hexRgb(HERALD[c.player.her].light) : [200,220,255], sp:200 });
     Snd.ding();
-    if (--c.shield.hits <= 0) { c.shield = null; float(c.x, c.y - 150, 'Shield broken', '#f6e8c6'); }
+    if (--c.shield.hits <= 0) { c.shield = null; float(c.x, c.y - 180, 'Shield broken', '#f6e8c6'); }
     finish(pr); return;
   }
   const solidHit = !!(h.castle || h.gift);
@@ -868,6 +902,16 @@ function impact(pr, h, ox, oy) {
       S.strikes.push({ x:pr.x, t:0, owner:pr.owner, done:false, pts:null });
       finish(pr); return;
     case 'grounddef': mound(pr.x, pr.y); finish(pr); return;
+    case 'pellet': {
+      const hitStone = !!h.castle;
+      explode(pr.x, pr.y, WEAP.pellet.r, pr.owner, { quiet:true });
+      burst(pr.x, pr.y, 6, { kind:'debris', cols: hitStone ? stoneCols() : T.cols, sp:120, up:100 });
+      burst(pr.x, pr.y, 3, { kind:'spark', sp:160 });
+      S.flashes.push({ x:pr.x, y:pr.y, r:12, t:0, dur:.18 });
+      S.shake = Math.min(7, S.shake + .8);
+      if (Math.random() < .4) Snd.boom(5);
+      finish(pr); return;
+    }
     case 'rockrain':
       explode(pr.x, pr.y, WEAP.rockrain.r, pr.owner);
       for (let i = 0; i < 7; i++) { const r = newProj('rock', pr.x + rand(-95, 95), -30 - rand(0, 60), rand(-20, 20), rand(60, 140), pr.owner); r.age = 1; r.wait = .25 + i*.13; S.proj.push(r); }
@@ -888,8 +932,8 @@ function updateDivine(dt) {
     const f = d.foes.find(f => f.sent < SHIVA_TRIDENTS && f.c.alive);
     if (f) {
       f.sent++;
-      const pr = newProj('trident', f.c.x + rand(-36, 36), -70 - rand(0, 60), 0, 900, d.owner);
-      pr.foe = f; pr.hitY = f.c.y - rand(18, 95); pr.age = 1;
+      const pr = newProj('trident', f.c.x + rand(-75, 75), -70 - rand(0, 60), 0, 900, d.owner);
+      pr.foe = f; pr.hitY = f.c.y - rand(18, 100); pr.age = 1;
       S.proj.push(pr);
     } else if (!S.proj.some(q => q.type === 'trident')) d.endT = d.t;
   }
@@ -912,7 +956,7 @@ function tridentStrike(pr) {
     damageCastle(c, pr.x, pr.y, 16, owner);
     for (let guard = 0; c.alive && hpShown(c.hp) > want + 1e-4 && guard < 400; guard++) {
       let lx = 0, ly = 0, ok = false;
-      for (let t = 0; t < 40 && !ok; t++) { lx = Math.floor(clamp(pr.x - (c.x - c.w/2) + rand(-45, 45), 0, c.w - 1)); ly = Math.floor(rand(0, c.h)); ok = c.mask[ly*c.w + lx] === 1; }
+      for (let t = 0; t < 40 && !ok; t++) { lx = Math.floor(clamp(pr.x - (c.x - c.w/2) + rand(-85, 85), 0, c.w - 1)); ly = Math.floor(rand(0, c.h)); ok = c.mask[ly*c.w + lx] === 1; }
       if (!ok) for (let i = 0; i < c.mask.length && !ok; i++) if (c.mask[i]) { lx = i % c.w; ly = (i/c.w)|0; ok = true; }
       if (!ok) break;
       damageCastle(c, c.x - c.w/2 + lx + .5, c.y - c.h + ly + .5, 5, owner);
@@ -933,7 +977,7 @@ function updateDriller(pr, dt) {
     if (pr.x < -30 || pr.x > W + 30 || pr.y > H + 30 || pr.y < -700) { finish(pr); return; }
     for (const c of S.castles) if (c.shield && c !== own && inShield(c, pr.x, pr.y)) {
       explode(pr.x, pr.y, 16, pr.owner, { exclude:c }); Snd.ding();
-      if (--c.shield.hits <= 0) { c.shield = null; float(c.x, c.y - 150, 'Shield broken', '#f6e8c6'); }
+      if (--c.shield.hits <= 0) { c.shield = null; float(c.x, c.y - 180, 'Shield broken', '#f6e8c6'); }
       finish(pr); return;
     }
   }
@@ -952,7 +996,7 @@ function updateDriller(pr, dt) {
 function updateMG(dt) {
   const m = S.mg, p = m.owner, c = p.castle;
   m.t += dt; m.next -= dt;
-  if (!c.alive || m.t >= MG_TIME) { S.mg = null; if (c.alive) float(c.x, c.y - 150, 'The gun is spent', '#f6e8c6'); refreshTray(); return; }
+  if (!c.alive || m.t >= MG_TIME) { S.mg = null; if (c.alive) float(c.x, c.y - 180, 'The gun is spent', '#f6e8c6'); refreshTray(); return; }
   if (m.next <= 0) {
     m.next = .05;
     const a = (p.angle + rand(-1.2, 1.2))*Math.PI/180, lp = launchPoint(c, p.angle);
@@ -1013,7 +1057,7 @@ function updateStrike(st, dt) {
     for (let i = 0; i <= segs; i++) { const u = i/segs; pts.push(lerp(x, st.x, u) + (i && i < segs ? rand(-18, 18) : 0), lerp(-10, y, u)); }
     st.pts = pts; st.branch = [];
     for (let b = 0; b < 3; b++) { const i = 2 + ((Math.random()*(segs - 5))|0); let bx = pts[i*2], by = pts[i*2 + 1]; const br = [bx, by]; const dir = Math.random() < .5 ? -1 : 1; for (let k = 0; k < 4; k++) { bx += dir*rand(8, 22); by += rand(12, 26); br.push(bx, by); } st.branch.push(br); }
-    if (shield) { explode(st.x, y, 14, st.owner, { exclude:shield }); if (--shield.shield.hits <= 0) { shield.shield = null; float(shield.x, shield.y - 150, 'Shield broken', '#f6e8c6'); } Snd.ding(); }
+    if (shield) { explode(st.x, y, 14, st.owner, { exclude:shield }); if (--shield.shield.hits <= 0) { shield.shield = null; float(shield.x, shield.y - 180, 'Shield broken', '#f6e8c6'); } Snd.ding(); }
     else { explode(st.x, y, WEAP.storm.r, st.owner); explode(st.x, y + 26, 18, st.owner, { quiet:true }); }
     burst(st.x, y, 24, { kind:'spark', col:[190,220,255], sp:260 });
     S.bolt = RM ? .08 : .22; Snd.thunder();
@@ -1027,8 +1071,8 @@ function updateQuake(q, dt) {
     const x = q.x + rand(-220, 220); let y = 0; while (y < H && !solidT(x, y)) y += 3;
     if (y < H) { crater(x, y + rand(2, 16), rand(5, 11)); burst(x, y, 6, { kind:'debris', cols:T.cols, sp:80, up:120 }); }
     for (const c of S.castles) if (c.alive && Math.abs(c.x - q.x) < 260 && Math.random() < .4) {
-      damageCastle(c, c.x + rand(-45, 45), c.y - rand(0, 45), 11, q.owner);
-      burst(c.x + rand(-40, 40), c.y - rand(20, 80), 4, { kind:'debris', cols:stoneCols(), sp:60, up:40 });
+      damageCastle(c, c.x + rand(-85, 85), c.y - rand(0, 60), 11, q.owner);
+      burst(c.x + rand(-80, 80), c.y - rand(20, 100), 4, { kind:'debris', cols:stoneCols(), sp:60, up:40 });
     }
   }
 }
@@ -1128,7 +1172,7 @@ function beginTurn() {
   if (Math.abs(S.wind) < 6) S.wind = 0;
   const c = p.castle;
   cam.manual = false;
-  if (c.shield && --c.shield.turns <= 0) { c.shield = null; float(c.x, c.y - 150, 'Shield fades', '#f6e8c6'); }
+  if (c.shield && --c.shield.turns <= 0) { c.shield = null; float(c.x, c.y - 180, 'Shield fades', '#f6e8c6'); }
   if (S.gifts.filter(g => !g.taken).length < 2 && Math.random() < .3) spawnGift();
   if (!owns(p, p.weapon)) p.weapon = 'arrow';
   p.angle = clampAng(p, p.angle);
@@ -1145,7 +1189,7 @@ function endTurn() {
 }
 function roundOver(winner) {
   S.state = 'roundEnd'; S.stateT = 2.6; S.winner = winner; S.cur = null;
-  if (winner) { winner.wins++; winner.money += 150; winner.roundEarn += 150; float(winner.castle.x, winner.castle.y - 150, '+$150 victory', '#f1cd73', 2.4); }
+  if (winner) { winner.wins++; winner.money += 150; winner.roundEarn += 150; float(winner.castle.x, winner.castle.y - 180, '+$150 victory', '#f1cd73', 2.4); }
   S.banner = { big: winner ? `${winner.name} holds the field` : 'No castle stands', sub: S.mode === 'game' && S.round >= S.rounds ? 'The siege is over' : `End of round ${S.round}`, t:0, dur:2.6 };
   updateHUD(); refreshTray();
 }
@@ -1180,8 +1224,8 @@ function fire() {
   }
   if (wid === 'defense') {
     c.shield = { hits:2, turns:3 };
-    float(c.x, c.y - 150, 'Shield raised', HERALD[p.her].light); Snd.shield();
-    burst(c.x, c.y - 58, 30, { kind:'spark', col:hexRgb(HERALD[p.her].light), sp:160 });
+    float(c.x, c.y - 180, 'Shield raised', HERALD[p.her].light); Snd.shield();
+    burst(c.x, c.y - CASTLE_MID, 30, { kind:'spark', col:hexRgb(HERALD[p.her].light), sp:160 });
     S.state = 'flight'; S.settle = 0; updateHUD(); refreshTray(); return;
   }
   const lp = launchPoint(c, p.angle), a = p.angle*Math.PI/180;
@@ -1251,7 +1295,7 @@ function aiPlan(p) {
   if (wid === 'falcon') return { wid, angle: (dir > 0 ? 64 : 116) + rand(-4, 4), power: rand(52, 62) };
   if (wid === 'balloon' && Math.abs(tx - me.x) < 1250) {
     const dx = Math.abs(tx - me.x), vw = windEst*.6*dir;
-    return { wid, angle: dir > 0 ? 70 : 110, power: clamp((dx/3.05 - 60 - vw)/3.4 + rand(-err[1], err[1])*1.5, 5, 100) };
+    return { wid, angle: dir > 0 ? 70 : 110, power: clamp((dx/3.8 - 60 - vw)/3.4 + rand(-err[1], err[1])*1.5, 5, 100) };
   }
   if (wid === 'balloon') wid = avail.includes('ball') ? 'ball' : 'arrow';
   if (wid === 'missile') {
@@ -1270,7 +1314,7 @@ function aiPlan(p) {
       if (id === 'storm' || id === 'rockrain') d = Math.abs(r.x - tx)*1.2 + (r.hit && r.hit !== target ? 40 : 0);
       else { d = Math.hypot(r.x - tx, r.y - ty); if (r.hit === target) d *= .3; else if (r.hit) d += 25; }
       if (r.out) d += 2000;
-      if (Math.hypot(r.x - me.x, r.y - (me.y - 60)) < R + (id === 'rockrain' || id === 'quake' ? 150 : 70)) d += 600;
+      if (Math.hypot(r.x - me.x, r.y - (me.y - CASTLE_MID)) < R + (id === 'rockrain' || id === 'quake' ? 150 : 70)) d += 600;
       return d;
     };
     let best = { s:Infinity, a:dir > 0 ? 45 : 135, pw:60, r:null };
@@ -1367,7 +1411,7 @@ function update(dt) {
       else if (c.falling) {
         c.falling = false;
         const n = Math.min(10, Math.floor(c.vy/70));
-        for (let i = 0; i < n && c.alive; i++) damageCastle(c, c.x + rand(-40, 40), c.y - rand(0, 34), 12, c.lastHit);
+        for (let i = 0; i < n && c.alive; i++) damageCastle(c, c.x + rand(-85, 85), c.y - rand(0, 40), 12, c.lastHit);
         if (c.vy > 120) { burst(c.x, c.y, 24, { kind:'dust', col:[150,130,110], sp:80, spread:40 }); Snd.thud(); S.shake += 6; }
         c.vy = 0;
       }
@@ -1447,6 +1491,9 @@ function drawProj(g, type, x, y, ang, t, s = 1, her = 0) {
       g.strokeStyle = 'rgba(255,240,200,.55)'; g.lineWidth = 1.2; g.beginPath(); g.ellipse(0, -2, 5, 13, 0, 0, TAU); g.stroke();
       g.fillStyle = '#7a5530'; g.fillRect(-5, 15, 10, 6); g.fillStyle = '#5a3a1e'; g.fillRect(-5, 15, 10, 1.5); break;
     }
+    case 'pellet':
+      g.fillStyle = '#23252a'; g.beginPath(); g.arc(0, 0, 2.6, 0, TAU); g.fill();
+      g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(-1.2, -1.4, 1.2, 1.2); break;
     case 'bomb':
       g.rotate(ang - Math.PI/2);
       g.fillStyle = '#23252a'; g.beginPath(); g.moveTo(0, 7); g.quadraticCurveTo(6, 0, 0, -5); g.quadraticCurveTo(-6, 0, 0, 7); g.fill();
@@ -1559,7 +1606,7 @@ function drawProj(g, type, x, y, ang, t, s = 1, her = 0) {
 }
 function drawFlag(c, left, top) {
   if (!flagAttached(c)) return;
-  const px = left + 81, base = top + 6, py = top - 24, her = HERALD[c.player.her];
+  const px = left + 100, base = top + 18, py = top - 26, her = HERALD[c.player.her];
   ctx.strokeStyle = '#3b2a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px, base); ctx.lineTo(px, py); ctx.stroke();
   ctx.fillStyle = '#d9a93d'; ctx.beginPath(); ctx.arc(px, py - 1, 2, 0, TAU); ctx.fill();
   const dir = S.wind < 0 ? -1 : 1, strength = .35 + Math.abs(S.wind)/WIND_MAX, L = 18 + 10*strength, top_ = [], bot = [];
@@ -1738,7 +1785,7 @@ function render() {
   for (const pr of S.proj) {
     if (pr.wait > 0) continue;
     const tr = pr.trail;
-    if (tr.length > 4 && !['falcon','balloon','missile'].includes(pr.type) && pr.drill <= 0) {
+    if (tr.length > 4 && !['falcon','balloon','missile','pellet'].includes(pr.type) && pr.drill <= 0) {
       ctx.strokeStyle = pr.type === 'storm' ? 'rgba(170,210,255,.35)' : 'rgba(255,250,235,.22)'; ctx.lineWidth = pr.type === 'bigarrow' || pr.type === 'rock' ? 3.5 : 2;
       ctx.beginPath(); ctx.moveTo(tr[0], tr[1]); for (let i = 2; i < tr.length; i += 2) ctx.lineTo(tr[i], tr[i + 1]); ctx.stroke();
     }
@@ -2076,7 +2123,7 @@ function humanSteering() { return S.mode === 'game' && S.mg && S.mg.owner.type =
 const canAim = () => humanAiming() || humanSteering();
 function aimAt(w) {
   const p = S.cur, c = p.castle;
-  let ang = Math.atan2(c.y - 74 - w.y, w.x - c.x)*180/Math.PI;
+  let ang = Math.atan2(c.y - LAUNCH_H - w.y, w.x - c.x)*180/Math.PI;
   p.angle = normAng(p, ang); updateHUD();
 }
 cv.addEventListener('contextmenu', e => { e.preventDefault(); if (canAim()) aimAt(worldPoint(e)); });
@@ -2088,7 +2135,7 @@ cv.addEventListener('pointerdown', e => {
   let mode = 'pan';
   if (inMinimap(sp)) mode = 'mini';
   else if (humanSteering()) mode = 'steer';
-  else if (humanAiming()) { const c = S.cur.castle; if (Math.hypot(wp.x - c.x, wp.y - (c.y - 60)) < 120) mode = 'aim'; }
+  else if (humanAiming()) { const c = S.cur.castle; if (Math.hypot(wp.x - c.x, wp.y - (c.y - CASTLE_MID)) < 130) mode = 'aim'; }
   S.drag = { mode, sx:e.clientX, sy:e.clientY, cam0:cam.x, moved:false };
   if (mode === 'mini') { cam.manual = true; cam.target = camClamp((sp.x - MM.x)*W/MM_W - VW/2); }
   if (mode === 'steer') aimAt(wp);
