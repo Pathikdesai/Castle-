@@ -1184,13 +1184,21 @@ function endTurn() {
   S.drag = null; S.charge = null;
   const alive = S.castles.filter(c => c.alive);
   if (alive.length <= 1) { roundOver(alive[0] ? alive[0].player : null); return; }
+  // once every human lord is out, settle the rest at once: the strongest computer castle takes the round
+  const humans = S.players.filter(p => p.type === 'human');
+  if (S.mode === 'game' && humans.length && !humans.some(p => p.castle.alive)) {
+    const best = alive.reduce((a, b) => b.hp > a.hp ? b : a);
+    roundOver(best.player, 'All human lords have fallen · decided by castle strength'); return;
+  }
   let i = S.turn; do { i = (i + 1) % S.players.length; } while (!S.players[i].castle.alive);
   S.turn = i; beginTurn();
 }
-function roundOver(winner) {
+function roundOver(winner, note) {
   S.state = 'roundEnd'; S.stateT = 2.6; S.winner = winner; S.cur = null;
   if (winner) { winner.wins++; winner.money += 150; winner.roundEarn += 150; float(winner.castle.x, winner.castle.y - 180, '+$150 victory', '#f1cd73', 2.4); }
-  S.banner = { big: winner ? `${winner.name} holds the field` : 'No castle stands', sub: S.mode === 'game' && S.round >= S.rounds ? 'The siege is over' : `End of round ${S.round}`, t:0, dur:2.6 };
+  const sub = S.mode === 'game' && S.round >= S.rounds ? 'The siege is over' : `End of round ${S.round}`;
+  S.banner = { big: winner ? `${winner.name} holds the field` : 'No castle stands', sub: note ? `${note} · ${sub}` : sub, t:0, dur: note ? 3.4 : 2.6 };
+  if (note) S.stateT = 3.4;
   updateHUD(); refreshTray();
 }
 function afterRound() {
@@ -1330,7 +1338,7 @@ function aiPlan(p) {
 function aiUpdate(dt) {
   const ai = S.ai, p = S.cur; if (!ai) return;
   ai.t += dt;
-  if (!ai.plan && ai.t > .7) { ai.plan = aiPlan(p); p.weapon = ai.plan.wid; ai.a0 = p.angle; ai.p0 = p.power; ai.t0 = ai.t; refreshTray(); }
+  if (!ai.plan && ai.t > .7) { ai.plan = aiPlan(p); p.weapon = ai.plan.wid; S.wPick = S.time; ai.a0 = p.angle; ai.p0 = p.power; ai.t0 = ai.t; refreshTray(); }
   if (ai.plan) {
     const u = clamp((ai.t - ai.t0)/.9, 0, 1), e = u*u*(3 - 2*u);
     p.angle = lerp(ai.a0, ai.plan.angle, e); p.power = lerp(ai.p0, ai.plan.power, e);
@@ -1618,6 +1626,18 @@ function drawFlag(c, left, top) {
   ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.beginPath(); ctx.moveTo(...bot[0]); bot.forEach(p => ctx.lineTo(...p)); for (let i = bot.length - 1; i >= 0; i--) ctx.lineTo(bot[i][0], bot[i][1] - 4); ctx.closePath(); ctx.fill();
   ctx.fillStyle = '#ecc55a'; const m = top_[4]; ctx.fillRect(m[0] - 1, m[1] + 4, 2.4, 6);
 }
+// the chosen weapon, shown over the castle whose turn it is; it swells briefly when the choice changes
+function drawWeaponTag(p, x, y) {
+  const w = WEAP[p.weapon], n = p.weapon === 'arrow' || w.secret ? '' : ` \u00d7${p.inv[p.weapon] || 0}`, text = w.name + n;
+  const pop = 1 + .3*clamp(1 - (S.time - (S.wPick || -9))/.35, 0, 1);
+  ctx.save(); ctx.translate(x, y); ctx.scale(pop, pop);
+  ctx.font = "700 16px 'Alegreya Sans SC', 'Alegreya Sans', sans-serif"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width + 22, th = 24;
+  ctx.fillStyle = 'rgba(28,18,10,.82)'; ctx.strokeStyle = HERALD[p.her].light; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(-tw/2, -th/2, tw, th, 7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#f6e8c6'; ctx.fillText(text, 0, 1);
+  ctx.restore(); ctx.textBaseline = 'alphabetic';
+}
 function drawShield(c) {
   const s = shieldCenter(c), her = hexRgb(HERALD[c.player.her].light), pulse = .5 + Math.sin(S.time*3)*.15;
   ctx.save(); ctx.beginPath(); ctx.rect(s.x - SHIELD_R - 4, s.y - SHIELD_R - 4, SHIELD_R*2 + 8, c.y + 6 - (s.y - SHIELD_R - 4)); ctx.clip();
@@ -1780,6 +1800,7 @@ function render() {
     const my = c.y - c.h - 44 + Math.sin(S.time*4)*4;
     ctx.fillStyle = '#f1cd73'; ctx.strokeStyle = 'rgba(30,18,8,.7)'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(c.x - 9, my - 6); ctx.lineTo(c.x + 9, my - 6); ctx.lineTo(c.x, my + 5); ctx.closePath(); ctx.stroke(); ctx.fill();
+    drawWeaponTag(p, c.x, my - 20);
   }
 
   for (const pr of S.proj) {
@@ -1950,7 +1971,7 @@ function refreshTray() {
 function selectWeapon(id) {
   if (!humanAiming()) return; const p = S.cur;
   if (!owns(p, id)) return;
-  p.weapon = id; p.angle = clampAng(p, p.angle); Snd.click(); refreshTray(); updateHUD();
+  p.weapon = id; p.angle = clampAng(p, p.angle); S.wPick = S.time; Snd.click(); refreshTray(); updateHUD();
 }
 function cycleWeapon(dir) {
   const p = S.cur, ids = WEAPONS.filter(w => owns(p, w.id)).map(w => w.id);
