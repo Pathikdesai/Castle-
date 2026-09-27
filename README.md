@@ -2,7 +2,7 @@
 
 A browser remake of **Castles v1.5** (Crazy Mice, 2001), the turn-based artillery game where up to five castle lords try to knock each other's walls down.
 
-It is one self-contained `index.html` with no build step and no dependencies beyond Google Fonts.
+It is one `index.html` with no build step and no dependencies beyond Google Fonts. The painted castle lives in `assets/castle.png`; if that file is missing, or the page is opened straight from disk (browsers will not let a page read image pixels from `file://`), the game falls back to a castle drawn in code. Serve the folder to see the painted one.
 
 ## Play locally
 

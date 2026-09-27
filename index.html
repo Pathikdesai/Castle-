@@ -243,7 +243,7 @@ tr.win td{font-weight:700}
 const VW = 1280, W = 2560, H = 720, G = 330, DT = 1/60, WIND_MAX = 75, POWER_K = 9.2, DEATH = 0.38;
 const CLOUD_W = VW + (W - VW)*.6 + 400, BGP = .5, BGW = VW + (W - VW)*BGP, MM_W = 280, MM_H = Math.round(MM_W*H/W), MG_TIME = 6;
 const BALLOON_FIRE = 6, BALLOON_RATE = .12;
-const SHIELD_R = 114, UPGRADE_PRICE = 120, UPGRADE_MAX = 2;
+const UPGRADE_PRICE = 120, UPGRADE_MAX = 2;
 const RM = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = s => document.querySelector(s);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -437,8 +437,8 @@ function genTerrain(slots) {
   for (const sx of slots) {
     let avg = 0, n = 0; for (let x = sx - 90; x <= sx + 90; x++) { if (x >= 0 && x < W) { avg += h[x]; n++; } } avg /= n;
     avg = clamp(avg, H*.36, H - 90);
-    for (let x = Math.max(0, sx - 161); x < Math.min(W, sx + 161); x++) {
-      const d = Math.abs(x - sx); let t = d < 106 ? 1 : 1 - (d - 106)/55; t = clamp(t, 0, 1); t = t*t*(3 - 2*t);
+    for (let x = Math.max(0, sx - 173); x < Math.min(W, sx + 173); x++) {
+      const d = Math.abs(x - sx); let t = d < 118 ? 1 : 1 - (d - 118)/55; t = clamp(t, 0, 1); t = t*t*(3 - 2*t);
       h[x] = lerp(h[x], avg, t);
     }
   }
@@ -539,7 +539,7 @@ function mound(x, y) {
 
 // ================= castles =================
 // Laid out after Bodiam: round corner drums, square towers with turrets, a machicolated gatehouse, crenellations everywhere.
-const CASTLE_W = 200, CASTLE_H = 130, LAUNCH_H = 120, CASTLE_MID = 62;
+const CASTLE_W = 200, CASTLE_H = 130, LAUNCH_H = 120;
 const CASTLE_TOWERS = [ // back to front; x, width, top of the wall below the parapet
   { x:140, w:26, top:28, turret:{ x:156, w:11, top:17 } },
   { x:34,  w:32, top:30, gate:true, turret:{ x:32, w:10, top:19 }, turret2:{ x:58, w:10, top:19 } },
@@ -599,7 +599,57 @@ function ironBands(c, level) {
   if (level >= 2) { c.fillStyle = '#d9a93d'; for (const t of CASTLE_TOWERS) c.fillRect(t.x - 2, t.top - 1, t.w + 4, 2); }
 }
 function slit(c, x, y, h) { c.fillRect(x - 1, y, 2.2, h); c.fillRect(x - 2.5, y + h/2 - 1, 5, 1.6); }
+// Painted castle art. If assets/castle.png is missing or unreadable (for example when index.html is opened from disk,
+// where browsers refuse to read image pixels), the castle drawn in code above is used instead.
+const ART = { castle:null };
+{ const im = new Image(); im.onload = () => { ART.castle = im; }; im.src = 'assets/castle.png'; }
+const ART_W = 224, ART_MAX_H = 170, ART_K = 2; // world size of a painted castle, and the extra resolution it keeps
+function castleGeometry(c) { // where shots leave from, where the shield sits
+  c.mid = Math.round(c.h*.48); c.shieldR = Math.round(Math.max(c.w/2 + 14, c.h - c.mid + 12));
+  return c;
+}
 function makeCastle(player, x, baseY, sky) {
+  if (ART.castle) { try { return makeArtCastle(player, x, baseY, sky, ART.castle); } catch (e) { ART.castle = null; } }
+  return makeDrawnCastle(player, x, baseY, sky);
+}
+function makeArtCastle(player, x, baseY, sky, im) {
+  // trim the transparent margin of the painting
+  const sw = Math.min(im.naturalWidth, 1024), sh = Math.round(im.naturalHeight*sw/im.naturalWidth);
+  const tc = document.createElement('canvas'); tc.width = sw; tc.height = sh; const tg = tc.getContext('2d');
+  tg.drawImage(im, 0, 0, sw, sh);
+  const td = tg.getImageData(0, 0, sw, sh).data; let x0 = sw, y0 = sh, x1 = -1, y1 = -1;
+  for (let yy = 0; yy < sh; yy++) for (let xx = 0; xx < sw; xx++) if (td[(yy*sw + xx)*4 + 3] > 40) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+  if (x1 < 0) throw new Error('empty castle art');
+  const k = im.naturalWidth/sw, bx = x0*k, by = y0*k, bw = (x1 - x0 + 1)*k, bh = (y1 - y0 + 1)*k;
+  let w = ART_W, h = Math.round(w*bh/bw); if (h > ART_MAX_H) { h = ART_MAX_H; w = Math.round(h*bw/bh); }
+  // the picture, kept at ART_K times world resolution so it stays crisp on sharp screens
+  const cv = document.createElement('canvas'); cv.width = w*ART_K; cv.height = h*ART_K;
+  const c = cv.getContext('2d'); c.imageSmoothingQuality = 'high'; c.drawImage(im, bx, by, bw, bh, 0, 0, cv.width, cv.height);
+  if (player.upgrade) { // iron straps across the stonework only
+    c.save(); c.globalCompositeOperation = 'source-atop'; c.scale(ART_K, ART_K);
+    for (const f of player.upgrade >= 2 ? [.3, .55, .8] : [.45, .75]) { const y = Math.round(h*f); c.fillStyle = 'rgba(52,54,60,.9)'; c.fillRect(0, y, w, 3); c.fillStyle = '#9aa0a8'; for (let xx = 3; xx < w; xx += 7) c.fillRect(xx, y + 1, 1.5, 1.5); }
+    c.restore();
+  }
+  const im2 = c.getImageData(0, 0, cv.width, cv.height), d = im2.data;
+  for (let i = 0; i < d.length; i += 4) { d[i] *= sky.tint[0]; d[i+1] *= sky.tint[1]; d[i+2] *= sky.tint[2]; }
+  c.putImageData(im2, 0, 0);
+  // hit mask at world resolution
+  const mc = document.createElement('canvas'); mc.width = w; mc.height = h; const mg = mc.getContext('2d');
+  mg.drawImage(im, bx, by, bw, bh, 0, 0, w, h);
+  const md = mg.getImageData(0, 0, w, h).data, mask = new Uint8Array(w*h); let count = 0;
+  for (let i = 0; i < w*h; i++) if (md[i*4 + 3] > 110) { mask[i] = 1; count++; }
+  const topAt = (cx, span) => { // highest point near a column, centred on a flat or domed peak
+    let y = h, xs = [];
+    for (let xx = Math.max(0, cx - span); xx <= Math.min(w - 1, cx + span); xx++) for (let yy = 0; yy < h; yy++) if (mask[yy*w + xx]) { if (yy < y) { y = yy; xs = [xx]; } else if (yy === y) xs.push(xx); break; }
+    return { x: xs.length ? xs[xs.length >> 1] : cx, y };
+  };
+  const mid = topAt(w >> 1, 8), l = topAt(Math.round(w*.2), Math.round(w*.08)), r = topAt(Math.round(w*.8), Math.round(w*.08));
+  const flags = [{ x:mid.x, y:mid.y + 3, s:1 }];
+  for (const t of [l, r]) if (t.y < h*.6) flags.push({ x:t.x, y:t.y + 3, s:.7 });
+  return castleGeometry({ player, x, y:baseY, w, h, k:ART_K, cv, c, mask, total:count, count, hp:1, alive:true, collapse:0, vy:0, falling:false, lastHit:null, flagPh:rand(0, 6), shield:null,
+    flags, launch: h - mid.y - 6 });
+}
+function makeDrawnCastle(player, x, baseY, sky) {
   const w = CASTLE_W, h = CASTLE_H, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
   const c = cv.getContext('2d'), her = HERALD[player.her], seed = (Math.random()*1e6)|0;
   brickFill(c, 20, 62, 160, h - 62, seed); battlement(c, 20, 62, 160, seed + 9); // curtain wall behind the towers
@@ -628,7 +678,8 @@ function makeCastle(player, x, baseY, sky) {
   c.fillStyle = lit ? '#ffc861' : '#20140b';
   [[15,62,9],[15,96,9],[100,40,10],[100,72,10],[100,102,9],[153,46,9],[153,80,9],[185,58,9],[185,94,9],[162,30,6]].forEach(([wx, wy, wh]) => slit(c, wx, wy, wh));
   for (const [wx, wy] of [[45,44],[55,44],[75,80],[129,80]]) { c.beginPath(); c.moveTo(wx - 2.5, wy + 11); c.lineTo(wx - 2.5, wy + 3); c.arc(wx, wy + 3, 2.5, Math.PI, 0); c.lineTo(wx + 2.5, wy + 11); c.closePath(); c.fill(); }
-  return { player, x, y:baseY, w, h, cv, c, mask, total:count, count, hp:1, alive:true, collapse:0, vy:0, falling:false, lastHit:null, flagPh:rand(0, 6), shield:null };
+  return castleGeometry({ player, x, y:baseY, w, h, k:1, cv, c, mask, total:count, count, hp:1, alive:true, collapse:0, vy:0, falling:false, lastHit:null, flagPh:rand(0, 6), shield:null,
+    flags:[{ x:100, y:18, s:1 }], launch:LAUNCH_H });
 }
 const hpShown = hp => clamp((hp - DEATH)/(1 - DEATH), 0, 1);
 function castlePix(c, x, y) {
@@ -636,15 +687,15 @@ function castlePix(c, x, y) {
   if (lx < 0 || ly < 0 || lx >= c.w || ly >= c.h) return false;
   return c.mask[ly*c.w + lx] === 1;
 }
-const shieldCenter = c => ({ x:c.x, y:c.y - CASTLE_MID });
-function inShield(c, x, y) { if (!c.shield || !c.alive) return false; const s = shieldCenter(c); return y < c.y + 6 && Math.hypot(x - s.x, y - s.y) < SHIELD_R; }
+const shieldCenter = c => ({ x:c.x, y:c.y - c.mid });
+function inShield(c, x, y) { if (!c.shield || !c.alive) return false; const s = shieldCenter(c); return y < c.y + 6 && Math.hypot(x - s.x, y - s.y) < c.shieldR; }
 function damageCastle(c, x, y, r, owner) {
   r *= 1 - .15*(c.player.upgrade || 0);
   const left = c.x - c.w/2, top = c.y - c.h, lx = x - left, ly = y - top;
   if (lx + r < 0 || lx - r > c.w || ly + r < 0 || ly - r > c.h) return 0;
   const removed = maskCircle(c.mask, c.w, c.h, lx, ly, r, 0);
   if (!removed) return 0;
-  const g = c.c; g.save();
+  const g = c.c; g.save(); g.scale(c.k, c.k);
   g.globalCompositeOperation = 'source-atop'; g.fillStyle = 'rgba(30,22,16,.6)'; g.beginPath(); g.arc(lx, ly, r + 4, 0, TAU); g.fill();
   g.globalCompositeOperation = 'destination-out'; g.beginPath(); g.arc(lx, ly, r, 0, TAU); g.fill(); g.restore();
   const before = hpShown(c.hp); c.count -= removed; c.hp = c.count/c.total;
@@ -668,7 +719,7 @@ function killCastle(c, killer) {
   if (who) { who.money += 75; who.roundEarn += 75; who.kills++; float(cx, cy - 70, `+$75  ${c.player.name} razed`, '#f1cd73', 2.4); }
   else float(cx, cy - 70, `${c.player.name}'s castle falls`, '#f5e6c4', 2.2);
 }
-function flagAttached(c) { for (let y = 18; y < 26; y++) for (let x = 98; x <= 102; x++) if (c.mask[y*c.w + x]) return true; return false; }
+function flagAttached(c, f) { for (let y = f.y; y < f.y + 8; y++) for (let x = f.x - 2; x <= f.x + 2; x++) if (c.mask[y*c.w + x]) return true; return false; }
 function castleSupported(c) {
   if (c.y >= H - 1) return true;
   const left = c.x - c.w/2, top = c.y - c.h;
@@ -679,7 +730,7 @@ function castleSupported(c) {
   }
   return false;
 }
-function launchPoint(c, ang) { const a = ang*Math.PI/180; return { x: c.x + Math.cos(a)*18, y: c.y - LAUNCH_H - Math.sin(a)*18 }; }
+function launchPoint(c, ang) { const a = ang*Math.PI/180; return { x: c.x + Math.cos(a)*18, y: c.y - c.launch - Math.sin(a)*18 }; }
 
 // ================= particles & fx =================
 function stoneCols() { const t = T.tint; return [[184,170,130],[150,138,104],[204,190,150],[118,108,82]].map(s => [s[0]*t[0], s[1]*t[1], s[2]*t[2]]); }
@@ -769,7 +820,7 @@ function superBurst(pr) {
 }
 function nearestFoe(pr) {
   let best = null, bd = 1e9;
-  for (const c of S.castles) { if (!c.alive || c === pr.owner.castle) continue; const d = Math.hypot(c.x - pr.x, c.y - CASTLE_MID - pr.y); if (d < bd) { bd = d; best = c; } }
+  for (const c of S.castles) { if (!c.alive || c === pr.owner.castle) continue; const d = Math.hypot(c.x - pr.x, c.y - c.mid - pr.y); if (d < bd) { bd = d; best = c; } }
   return best;
 }
 function bounce(pr, ox, oy, rest) {
@@ -829,7 +880,7 @@ function updateProj(pr, dt) {
     const tgt = nearestFoe(pr);
     let ang = Math.atan2(pr.vy, pr.vx);
     if (tgt) {
-      const want = Math.atan2(tgt.y - CASTLE_MID - pr.y, tgt.x - pr.x);
+      const want = Math.atan2(tgt.y - tgt.mid - pr.y, tgt.x - pr.x);
       let d = want - ang; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
       ang += clamp(d, -3.4*dt, 3.4*dt);
     }
@@ -1233,7 +1284,7 @@ function fire() {
   if (wid === 'defense') {
     c.shield = { hits:2, turns:3 };
     float(c.x, c.y - 180, 'Shield raised', HERALD[p.her].light); Snd.shield();
-    burst(c.x, c.y - CASTLE_MID, 30, { kind:'spark', col:hexRgb(HERALD[p.her].light), sp:160 });
+    burst(c.x, c.y - c.mid, 30, { kind:'spark', col:hexRgb(HERALD[p.her].light), sp:160 });
     S.state = 'flight'; S.settle = 0; updateHUD(); refreshTray(); return;
   }
   const lp = launchPoint(c, p.angle), a = p.angle*Math.PI/180;
@@ -1322,7 +1373,7 @@ function aiPlan(p) {
       if (id === 'storm' || id === 'rockrain') d = Math.abs(r.x - tx)*1.2 + (r.hit && r.hit !== target ? 40 : 0);
       else { d = Math.hypot(r.x - tx, r.y - ty); if (r.hit === target) d *= .3; else if (r.hit) d += 25; }
       if (r.out) d += 2000;
-      if (Math.hypot(r.x - me.x, r.y - (me.y - CASTLE_MID)) < R + (id === 'rockrain' || id === 'quake' ? 150 : 70)) d += 600;
+      if (Math.hypot(r.x - me.x, r.y - (me.y - me.mid)) < R + (id === 'rockrain' || id === 'quake' ? 150 : 70)) d += 600;
       return d;
     };
     let best = { s:Infinity, a:dir > 0 ? 45 : 135, pw:60, r:null };
@@ -1612,9 +1663,10 @@ function drawProj(g, type, x, y, ang, t, s = 1, her = 0) {
   }
   g.restore();
 }
-function drawFlag(c, left, top) {
-  if (!flagAttached(c)) return;
-  const px = left + 100, base = top + 18, py = top - 26, her = HERALD[c.player.her];
+function drawFlag(c, left, top) { for (const f of c.flags) if (flagAttached(c, f)) drawOneFlag(c, f, left, top); }
+function drawOneFlag(c, f, left, top) {
+  ctx.save(); ctx.translate(left + f.x, top + f.y); ctx.scale(f.s, f.s);
+  const px = 0, base = 0, py = -44, her = HERALD[c.player.her];
   ctx.strokeStyle = '#3b2a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px, base); ctx.lineTo(px, py); ctx.stroke();
   ctx.fillStyle = '#d9a93d'; ctx.beginPath(); ctx.arc(px, py - 1, 2, 0, TAU); ctx.fill();
   const dir = S.wind < 0 ? -1 : 1, strength = .35 + Math.abs(S.wind)/WIND_MAX, L = 18 + 10*strength, top_ = [], bot = [];
@@ -1625,6 +1677,7 @@ function drawFlag(c, left, top) {
   ctx.fillStyle = her.col; ctx.beginPath(); ctx.moveTo(...top_[0]); top_.forEach(p => ctx.lineTo(...p)); for (let i = bot.length - 1; i >= 0; i--) ctx.lineTo(...bot[i]); ctx.closePath(); ctx.fill();
   ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.beginPath(); ctx.moveTo(...bot[0]); bot.forEach(p => ctx.lineTo(...p)); for (let i = bot.length - 1; i >= 0; i--) ctx.lineTo(bot[i][0], bot[i][1] - 4); ctx.closePath(); ctx.fill();
   ctx.fillStyle = '#ecc55a'; const m = top_[4]; ctx.fillRect(m[0] - 1, m[1] + 4, 2.4, 6);
+  ctx.restore();
 }
 // the chosen weapon, shown over the castle whose turn it is; it swells briefly when the choice changes
 function drawWeaponTag(p, x, y) {
@@ -1639,14 +1692,15 @@ function drawWeaponTag(p, x, y) {
   ctx.restore(); ctx.textBaseline = 'alphabetic';
 }
 function drawShield(c) {
+  const R = c.shieldR;
   const s = shieldCenter(c), her = hexRgb(HERALD[c.player.her].light), pulse = .5 + Math.sin(S.time*3)*.15;
-  ctx.save(); ctx.beginPath(); ctx.rect(s.x - SHIELD_R - 4, s.y - SHIELD_R - 4, SHIELD_R*2 + 8, c.y + 6 - (s.y - SHIELD_R - 4)); ctx.clip();
-  const gr = ctx.createRadialGradient(s.x, s.y, SHIELD_R*.5, s.x, s.y, SHIELD_R);
+  ctx.save(); ctx.beginPath(); ctx.rect(s.x - R - 4, s.y - R - 4, R*2 + 8, c.y + 6 - (s.y - R - 4)); ctx.clip();
+  const gr = ctx.createRadialGradient(s.x, s.y, R*.5, s.x, s.y, R);
   gr.addColorStop(0, rgba(her, 0)); gr.addColorStop(.85, rgba(her, .12)); gr.addColorStop(1, rgba(her, .32*pulse + .1));
-  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(s.x, s.y, SHIELD_R, 0, TAU); ctx.fill();
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, TAU); ctx.fill();
   ctx.strokeStyle = rgba(her, .75); ctx.lineWidth = 1.6; ctx.setLineDash([10, 6]); ctx.lineDashOffset = -S.time*20;
-  ctx.beginPath(); ctx.arc(s.x, s.y, SHIELD_R, 0, TAU); ctx.stroke(); ctx.restore();
-  for (let i = 0; i < c.shield.hits; i++) { ctx.fillStyle = rgba(her, .95); ctx.beginPath(); ctx.arc(s.x - 6 + i*12, s.y - SHIELD_R - 8, 3.5, 0, TAU); ctx.fill(); }
+  ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, TAU); ctx.stroke(); ctx.restore();
+  for (let i = 0; i < c.shield.hits; i++) { ctx.fillStyle = rgba(her, .95); ctx.beginPath(); ctx.arc(s.x - 6 + i*12, s.y - R - 8, 3.5, 0, TAU); ctx.fill(); }
 }
 function drawGun(m) {
   const p = m.owner, c = p.castle, a = p.angle*Math.PI/180, lp = launchPoint(c, p.angle);
@@ -1751,11 +1805,11 @@ function render() {
 
   for (const c of S.castles) {
     const left = c.x - c.w/2, top = c.y - c.h;
-    if (c.alive) { ctx.drawImage(c.cv, left, top); drawFlag(c, left, top); }
+    if (c.alive) { ctx.drawImage(c.cv, left, top, c.w, c.h); drawFlag(c, left, top); }
     else if (c.collapse > 0) {
       const t = c.collapse, sink = t*t*c.h*.95;
       ctx.save(); ctx.beginPath(); ctx.rect(left - 20, top - 60, c.w + 40, c.h + 60); ctx.clip();
-      ctx.drawImage(c.cv, left + rand(-2, 2)*(1 - t), top + sink); ctx.restore();
+      ctx.drawImage(c.cv, left + rand(-2, 2)*(1 - t), top + sink, c.w, c.h); ctx.restore();
     }
   }
   for (const g of S.gifts) drawGift(g);
@@ -2144,7 +2198,7 @@ function humanSteering() { return S.mode === 'game' && S.mg && S.mg.owner.type =
 const canAim = () => humanAiming() || humanSteering();
 function aimAt(w) {
   const p = S.cur, c = p.castle;
-  let ang = Math.atan2(c.y - LAUNCH_H - w.y, w.x - c.x)*180/Math.PI;
+  let ang = Math.atan2(c.y - c.launch - w.y, w.x - c.x)*180/Math.PI;
   p.angle = normAng(p, ang); updateHUD();
 }
 cv.addEventListener('contextmenu', e => { e.preventDefault(); if (canAim()) aimAt(worldPoint(e)); });
@@ -2156,7 +2210,7 @@ cv.addEventListener('pointerdown', e => {
   let mode = 'pan';
   if (inMinimap(sp)) mode = 'mini';
   else if (humanSteering()) mode = 'steer';
-  else if (humanAiming()) { const c = S.cur.castle; if (Math.hypot(wp.x - c.x, wp.y - (c.y - CASTLE_MID)) < 130) mode = 'aim'; }
+  else if (humanAiming()) { const c = S.cur.castle; if (Math.hypot(wp.x - c.x, wp.y - (c.y - c.mid)) < 130) mode = 'aim'; }
   S.drag = { mode, sx:e.clientX, sy:e.clientY, cam0:cam.x, moved:false };
   if (mode === 'mini') { cam.manual = true; cam.target = camClamp((sp.x - MM.x)*W/MM_W - VW/2); }
   if (mode === 'steer') aimAt(wp);
