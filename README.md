@@ -26,7 +26,7 @@ This repo includes a `render.yaml` Blueprint for a free static site.
 - The original ten weapons: Arrow, Big Arrow, Grenade, Super Grenade, Direct Missile, Balloon, Defense, Ground Defense, Ball Grenade and Gimlet.
 - Seven extras in the spirit of the registered edition: Cannonball, Fire Pot, Sapper Charge, Rock Rain, War Falcon, Earthquake and Storm Bolt.
 - Castle upgrades, falling gift crates, wind, ground that gets blown away, and an armory between rounds.
-- A battlefield twice the screen width, with panning and a minimap.
+- A battlefield six screens wide, with panning and a minimap.
 
 ## Controls
 
